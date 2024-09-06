@@ -12,6 +12,7 @@ import { parseUrl } from "@utils/misc";
 import definePlugin, { OptionType } from "@utils/types";
 import { findByCode } from "@webpack";
 import { ChannelStore, Constants, Menu, React, RestAPI, Toasts } from "@webpack/common";
+import { Logger } from "@utils/Logger";
 
 const embedCache = new Map<string, any>();
 
@@ -187,13 +188,13 @@ const unfurlEmbed = async function (originalUrl, url, message) {
             urls: [url]
         }
     }).catch(e => {
-        Toasts.show({ message: "Failed to fetch embed", id: Toasts.genId(), type: 2 /* ToastType.FAILURE */ }); // ToastType isn't exported
-        console.error(e);
+        Toasts.show({ message: "Failed to fetch embed", id: Toasts.genId(), type: Toasts.Type.FAILURE });
+        new Logger("ShowMessageEmbeds").error("Failed to fetch embed", e);
     }).then(resp => {
         const { body } = resp;
 
         if (!body.embeds || body.embeds.length === 0) {
-            Toasts.show({ message: "No embeds found", id: Toasts.genId(), type: 2 /* ToastType.FAILURE */ });
+            Toasts.show({ message: "No embeds found", id: Toasts.genId(), type: Toasts.Type.FAILURE });
         }
 
         const { embeds } = body;
