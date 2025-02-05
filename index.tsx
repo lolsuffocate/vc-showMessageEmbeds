@@ -8,88 +8,89 @@ import { findGroupChildrenByChildId } from "@api/ContextMenu";
 import { updateMessage } from "@api/MessageUpdater";
 import { definePluginSettings } from "@api/Settings";
 import { ImageVisible } from "@components/Icons";
+import { Logger } from "@utils/Logger";
 import { parseUrl } from "@utils/misc";
 import definePlugin, { OptionType } from "@utils/types";
-import { findByCode } from "@webpack";
-import { ChannelStore, Constants, Menu, React, RestAPI, Toasts } from "@webpack/common";
-import { Logger } from "@utils/Logger";
+import { findByCodeLazy } from "@webpack";
+import { ChannelStore, Constants, Menu, MessageStore, React, RestAPI, showToast, Toasts } from "@webpack/common";
+import { Message } from "discord-types/general";
 
-const embedCache = new Map<string, any>();
+import { replaceUrl } from "../embedReplace";
 
-
+const logger = new Logger("ShowMessageEmbeds");
 const settings = definePluginSettings({
-    // todo remove these if ever released
-    "Show vxtiktok Embeds": {
+    doNotShowOnReplacedEmbeds: {
         type: OptionType.BOOLEAN,
-        description: "When you show embeds for tiktok links, they will be shown as vxtiktok embeds",
-    },
-    "Show vxtwitter Embeds": {
-        type: OptionType.BOOLEAN,
-        description: "When you show embeds for twitter links, they will be shown as vxtwitter embeds",
-    },
-    "Show ddinstagram Embeds": {
-        type: OptionType.BOOLEAN,
-        description: "When you show embeds for instagram links, they will be shown as ddinstagram embeds"
-    },
-    "Show rxddit Embeds": {
-        type: OptionType.BOOLEAN,
-        description: "When you show embeds for reddit links, they will be shown as rxddit embeds"
+        default: true,
+        description: "Don't show the 'Show Embed' button on replaced embeds when using the EmbedReplace plugin"
     }
 });
 
-export default definePlugin({
-    name: "ShowMessageEmbeds",
-    description: "Adds a context menu option to show embeds for links that don't have one",
-    authors: [{
-        name: "Suffocate",
-        id: 772601756776923187n
-    }],
-    dependencies: ["MessagePopoverAPI"],
-    settings,
+const addShowEmbedButton = (children, props)=> {
+    if (props.itemSrc || !props.itemHref || !props.message) return; // itemSrc means the right clicked item is an image/attachment
 
-    contextMenus: {
-        "message": (children, props) => {
-            if (props.itemSrc || !props.itemHref) return null; // if the item right-clicked is not a link or is an attachment, don't add
+    const group = findGroupChildrenByChildId("copy-native-link", children);
+    if (!group) return;
 
-            const { message } = props;
-            const origUrl = normaliseUrl(props.itemHref);
-            const replacedUrl = replaceSocialMediaLinks(origUrl);
+    const { message } = props;
 
-            if (messageContainsEmbedForUrl(message, replacedUrl) ||
-                messageContainsAttachmentForUrl(message, replacedUrl)) return null; // try and match the url to an existing embed or attachment (discord only embeds once per url)
+    addButton(group, message, props.itemHref);
+};
 
-            const group = findGroupChildrenByChildId("copy-native-link", children);
-            if (!group) return null;
+const addShowAttachmentEmbedButton = (children, props) => {
+    if (!props.attachmentUrl) return;
 
-            group.splice(0, 0,
-                <Menu.MenuItem
-                    id="unfurl-url"
-                    label="Show Embed"
-                    action={_ => unfurlEmbed(origUrl, replacedUrl, message)}
-                    icon={ImageVisible}
-                    key="unfurl-url"/>);
+    const message = MessageStore.getMessage(props.channelId, props.messageId);
+    if (!message) return;
+
+    addButton(children, message, props.attachmentUrl);
+};
+
+const addButton = (children, message, url) => {
+    url = normaliseUrl(url);
+
+    // if the user has an EmbedReplace rule that matches the result of replacing this url, don't show the button to show the original embed
+    if(settings.store.doNotShowOnReplacedEmbeds && Vencord.Plugins.isPluginEnabled("EmbedReplace")) {
+        const repUrl = normaliseUrl(replaceUrl(url));
+        if(repUrl !== url && isEmbedInMessage(message, repUrl)) { // if the replacement had an effect and the replaced url has an embed, don't show the button
+            return;
         }
     }
-});
+
+    if (!isEmbedInMessage(message, url)) {
+        children.splice(0, 0,
+            <Menu.MenuItem
+                id="unfurl-url"
+                label="Show Embed"
+                action={_ => unfurlEmbed(url, message)}
+                icon={ImageVisible}
+                key="unfurl-url"/>);
+    }
+};
+
+function isEmbedInMessage(message: Message, url: string): boolean {
+    return message?.embeds?.some((embed: any) => {
+        return embed?.url === url;
+    }) || message?.attachments?.some((attachment: any) => {
+        return attachment?.url === url;
+    });
+}
 
 // special cases where the unfurl api endpoint returns an embed with a different url than the one we requested
-// will add more as I come across them
-const normaliseUrl = function (url) {
+// e.g. you request an embed for a youtu.be link and the returned object has { ... url: youtube.com }
+// this is not an exhaustive list, may need to add more cases in the future
+function normaliseUrl(url: string): string {
     // normalise youtube urls to the /watch?v= format (t param is replaced with start, v always comes first)
     const youtubeRegex = /(https?:\/\/)?(?:m\.|www\.)?(youtu\.be|youtube\.com)\/(embed\/|v\/|watch\?v=|watch\?.+&v=|shorts\/)?((\w|-){11})(?:\S+)?/;
 
     if (youtubeRegex.test(url)) {
         const urlObj = new URL(url);
         const params = new URLSearchParams(urlObj.search);
-        let start = -1;
+        let start = 0;
 
         if (params.has("t") || params.has("start")) {
-            let startParam = params.get("start"); // start takes precedence over t
-            if (!startParam) startParam = params.get("t");
-            if (startParam &&
-                startParam.match(/^(?:(\d+h)?(\d+m)?(\d+s)?(\d+)?)?$/)
-            ) {
-                start = 0;
+            const startParam = params.get("start") || params.get("t");
+            if (startParam && startParam.match(/^(?:(\d+h)?(\d+m)?(\d+s)?(\d+)?)?$/)) {
                 const hours = startParam.match(/(\d+)h/);
                 const minutes = startParam.match(/(\d+)m/);
                 const seconds = startParam.match(/(\d+)s/);
@@ -100,83 +101,23 @@ const normaliseUrl = function (url) {
                 if (unqualifiedSeconds) start += parseInt(unqualifiedSeconds[1]);
             }
         }
-        url = url.replace(youtubeRegex, "https://www.youtube.com/watch?v=$4" + (start !== -1 ? "&start=" + start : ""));
+        url = url.replace(youtubeRegex, `https://www.youtube.com/watch?v=$4${start ? "&start=" + start : ""}`);
     }
 
-    const urlObj = new URL(url);
-    const domainName = urlObj.hostname;
+    // x.com links still return an embed with url twitter.com at the moment
+    const xDotComRegex = /(https?:\/\/(?:www\.)?)x\.com(\/.*)?/;
 
-    // www.x.com, x.com -> www.twitter.com, twitter.com
-    if (domainName.endsWith(".x.com") || domainName === "x.com") {
-        if (domainName === "x.com") {
-            url = url.replace("x.com", "twitter.com");
-        } else if (domainName === "www.x.com") {
-            url = url.replace("www.x.com", "www.twitter.com");
-        }
+    if (xDotComRegex.test(url)) {
+        url =url.replace(xDotComRegex, (match, p1, p2) => p1 + "twitter.com" + (p2 || ""));
     }
 
     return url;
-};
+}
 
-const replaceSocialMediaLinks = function (url) {
-    // todo remove this, this is just for me to try out
-    // some discord embedders for common sites
-    // instagram -> ddinstagram
-    // twitter -> vxtwitter
-    // tiktok -> vxtiktok
-    // reddit -> rxddit
+const convertEmbed = findByCodeLazy(".uniqueId(\"embed_\")");
 
-    const urlObj = new URL(url);
-    const domainName = urlObj.hostname;
-
-    if (settings.store["Show ddinstagram Embeds"]) {
-        if (domainName === "instagram.com" || domainName === "www.instagram.com") {
-            url = url.replace("instagram.com", "ddinstagram.com");
-        }
-    }
-
-    if (settings.store["Show vxtwitter Embeds"]) {
-        if (domainName === "twitter.com" || domainName === "www.twitter.com") {
-            url = url.replace("twitter.com", "vxtwitter.com");
-        }
-    }
-
-    if (settings.store["Show vxtiktok Embeds"]) {
-        if (domainName === "tiktok.com" || domainName === "www.tiktok.com") {
-            url = url.replace("tiktok.com", "vxtiktok.com");
-        }
-    }
-
-    if (settings.store["Show rxddit Embeds"]) {
-        if (domainName === "reddit.com" || domainName === "www.reddit.com") {
-            url = url.replace("reddit.com", "rxddit.com");
-        }
-    }
-
-    return url;
-};
-
-const unfurlEmbed = async function (originalUrl, url, message) {
+function unfurlEmbed(url: string, message: Message) {
     const channel = ChannelStore.getChannel(message.channel_id);
-
-    const convertedEmbeds: any = [];
-
-    const convertEmbed = findByCode(".uniqueId(\"embed_\")");
-
-    const existingEmbeds = message.embeds;
-
-    if (embedCache.has(url)) {
-        for (const embed of embedCache.get(url)) {
-            // if the message has an embed for the original url, replace it with the new one
-            if (existingEmbeds.some((existing: any) => existing.url === originalUrl)) {
-                existingEmbeds.splice(existingEmbeds.findIndex((existing: any) => existing.url === embed.url), 1, convertEmbed(channel.id, message.id, embed));
-            } else {
-                convertedEmbeds.push(convertEmbed(channel.id, message.id, embed));
-            }
-        }
-        updateMessage(message.channel_id, message.id, { embeds: [...existingEmbeds, ...convertedEmbeds] });
-        return;
-    }
 
     if (!parseUrl(url)) {
         return;
@@ -188,47 +129,65 @@ const unfurlEmbed = async function (originalUrl, url, message) {
             urls: [url]
         }
     }).catch(e => {
-        Toasts.show({ message: "Failed to fetch embed", id: Toasts.genId(), type: Toasts.Type.FAILURE });
-        new Logger("ShowMessageEmbeds").error("Failed to fetch embed", e);
+        showFailureToast("Failed to get embed");
+        logger.error("Failed to get embed", e);
     }).then(resp => {
-        const { body } = resp;
-
-        if (!body.embeds || body.embeds.length === 0) {
-            Toasts.show({ message: "No embeds found", id: Toasts.genId(), type: Toasts.Type.FAILURE });
+        if (!resp?.body || !resp?.body?.embeds || resp.body.embeds.length === 0) {
+            showFailureToast("No embeds found");
+            return;
         }
 
-        const { embeds } = body;
+        const { embeds } = resp.body;
+        const convertedEmbeds: any = [];
 
-        if (!embeds || embeds.length === 0) return;
-        embedCache.set(url, embeds);
         for (const embed of embeds) {
-            // if the message has an embed for the original url, replace it with the new one
-            if (existingEmbeds.some((existing: any) => existing.url === originalUrl)) {
-                existingEmbeds.splice(existingEmbeds.findIndex((existing: any) => existing.url === embed.url), 1, convertEmbed(channel.id, message.id, embed));
-            } else {
-                convertedEmbeds.push(convertEmbed(channel.id, message.id, embed));
+            try {
+                const convertedEmbed = convertEmbed(channel.id, message.id, embed);
+                if (!convertedEmbed) {
+                    showFailureToast("Failed to get embed");
+                    logger.error("embed object couldn't be converted", embed);
+                    continue;
+                }
+                convertedEmbeds.push(convertedEmbed);
+            } catch (e) {
+                showFailureToast("Failed to get embed");
+                logger.error("Failed to convert embed", e);
             }
         }
 
-        const newEmbeds = [...existingEmbeds, ...convertedEmbeds];
+        const newEmbeds = [...message.embeds, ...convertedEmbeds];
 
-        // sort embeds in the order their urls appear in the message
         newEmbeds.sort((a: any, b: any) => {
             return message.content.indexOf(a.url) - message.content.indexOf(b.url);
         });
 
         updateMessage(message.channel_id, message.id, { embeds: newEmbeds });
     });
-};
-
-function messageContainsEmbedForUrl(message: any, url: string): boolean {
-    return message?.embeds?.some((embed: any) => {
-        return embed.url === url;
-    });
 }
 
-function messageContainsAttachmentForUrl(message: any, url: string): boolean {
-    return message?.attachments?.some((attachment: any) => {
-        return attachment.url === url;
-    });
+function showFailureToast(message: string) {
+    showToast(message, Toasts.Type.FAILURE, { position: Toasts.Position.BOTTOM });
 }
+
+export default definePlugin({
+    name: "ShowMessageEmbeds",
+    description: "Adds a context menu option to show embeds for links that don't have one",
+    authors: [{ id: 772601756776923187n, name: "Suffocate" }],
+
+    settings,
+
+    patches:[
+        {
+            find: "className:\"attachmentLink\",",
+            replacement: {
+                match: /(?:(\i).noStyleAndInteraction.*?)attachmentName:\i.attachmentName/,
+                replace: "$&,channelId:$1.channelId,messageId:$1.messageId",
+            }
+        }
+    ],
+
+    contextMenus: {
+        "message": addShowEmbedButton,
+        "attachment-link-context": addShowAttachmentEmbedButton
+    }
+});

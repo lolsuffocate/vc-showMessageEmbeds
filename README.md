@@ -1,8 +1,9 @@
 # ShowMessageEmbeds
+
 Adds a context menu option to show embeds for links that don't have one.
 
-Also contains options to replace the embeds for popular social media sites with domains that embed the content better
-* twitter.com -> vxtwitter.com
-* instagram.com -> ddinstagram.com
-* tiktok.com -> vxtiktok.com
-* reddit.com -> rxddit.com
+Right click on the link and select "Show Embed" to use.
+
+The new embed is only visible locally, allowing you to view embeds of links sent by users that don't have embed permissions or surrounded the link with < > in their message.
+
+![Preview](https://suff.uk/s/X60JH.gif)
