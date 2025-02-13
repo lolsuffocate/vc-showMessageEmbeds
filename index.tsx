@@ -7,7 +7,7 @@
 import { findGroupChildrenByChildId } from "@api/ContextMenu";
 import { updateMessage } from "@api/MessageUpdater";
 import { definePluginSettings } from "@api/Settings";
-import { ImageVisible } from "@components/Icons";
+import { ImageInvisible, ImageVisible } from "@components/Icons";
 import { Logger } from "@utils/Logger";
 import { parseUrl } from "@utils/misc";
 import definePlugin, { OptionType } from "@utils/types";
@@ -26,7 +26,7 @@ const settings = definePluginSettings({
     }
 });
 
-const addShowEmbedButton = (children, props)=> {
+const addShowEmbedButton = (children, props) => {
     if (props.itemSrc || !props.itemHref || !props.message) return; // itemSrc means the right clicked item is an image/attachment
 
     const group = findGroupChildrenByChildId("copy-native-link", children);
@@ -50,9 +50,9 @@ const addButton = (children, message, url) => {
     url = normaliseUrl(url);
 
     // if the user has an EmbedReplace rule that matches the result of replacing this url, don't show the button to show the original embed
-    if(settings.store.doNotShowOnReplacedEmbeds && Vencord.Plugins.isPluginEnabled("EmbedReplace")) {
+    if (settings.store.doNotShowOnReplacedEmbeds && Vencord.Plugins.isPluginEnabled("EmbedReplace")) {
         const repUrl = normaliseUrl(replaceUrl(url));
-        if(repUrl !== url && isEmbedInMessage(message, repUrl)) { // if the replacement had an effect and the replaced url has an embed, don't show the button
+        if (repUrl !== url && isEmbedInMessage(message, repUrl)) { // if the replacement had an effect and the replaced url has an embed, don't show the button
             return;
         }
     }
@@ -60,11 +60,19 @@ const addButton = (children, message, url) => {
     if (!isEmbedInMessage(message, url)) {
         children.splice(0, 0,
             <Menu.MenuItem
-                id="unfurl-url"
+                id="vc-sme-show"
                 label="Show Embed"
                 action={_ => unfurlEmbed(url, message)}
                 icon={ImageVisible}
-                key="unfurl-url"/>);
+                key="vc-sme-show"/>);
+    } else if (isUrlInMessage(message, url)) { // check the url is actually in the message text so we know it's one people can actually add back
+        children.splice(0, 0,
+            <Menu.MenuItem
+                id="vc-sme-remove"
+                label="Remove Embed"
+                action={_ => removeEmbed(url, message)}
+                icon={ImageInvisible}
+                key="vc-sme-remove"/>);
     }
 };
 
@@ -74,6 +82,16 @@ function isEmbedInMessage(message: Message, url: string): boolean {
     }) || message?.attachments?.some((attachment: any) => {
         return attachment?.url === url;
     });
+}
+
+function isUrlInMessage(message: Message, url: string): boolean {
+    const urls = message?.content?.match(/https?:\/\/[^\s]+/g) || [];
+    for (const u of urls) {
+        if (u === url || normaliseUrl(u) === url) {
+            return true;
+        }
+    }
+    return false;
 }
 
 // special cases where the unfurl api endpoint returns an embed with a different url than the one we requested
@@ -108,7 +126,16 @@ function normaliseUrl(url: string): string {
     const xDotComRegex = /(https?:\/\/(?:www\.)?)x\.com(\/.*)?/;
 
     if (xDotComRegex.test(url)) {
-        url =url.replace(xDotComRegex, (match, p1, p2) => p1 + "twitter.com" + (p2 || ""));
+        url = url.replace(xDotComRegex, (match, p1, p2) => p1 + "twitter.com" + (p2 || ""));
+    }
+
+    // tiktok adds ?enable_tiktok_webview=true
+    const tiktokRegex = /(https?:\/\/(?:www\.)?)tiktok\.com(\/.*)?/;
+    const searchParams = url.includes("?") ? new URLSearchParams(url.split("?")[1]) : new URLSearchParams();
+    if (tiktokRegex.test(url) && !searchParams.has("enable_tiktok_webview")) {
+        searchParams.append("enable_tiktok_webview", "true");
+        const newSearch = searchParams.toString();
+        url = url.split("?")[0] + (newSearch ? "?" + newSearch : "");
     }
 
     return url;
@@ -165,6 +192,11 @@ function unfurlEmbed(url: string, message: Message) {
     });
 }
 
+function removeEmbed(url: string, message: Message) {
+    const newEmbeds = message.embeds.filter((embed: any) => embed.url !== url);
+    updateMessage(message.channel_id, message.id, { embeds: newEmbeds });
+}
+
 function showFailureToast(message: string) {
     showToast(message, Toasts.Type.FAILURE, { position: Toasts.Position.BOTTOM });
 }
@@ -176,7 +208,7 @@ export default definePlugin({
 
     settings,
 
-    patches:[
+    patches: [
         {
             find: "className:\"attachmentLink\",",
             replacement: {
