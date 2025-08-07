@@ -11,9 +11,9 @@ import { ImageInvisible, ImageVisible } from "@components/Icons";
 import { Logger } from "@utils/Logger";
 import { parseUrl } from "@utils/misc";
 import definePlugin, { OptionType } from "@utils/types";
+import { Message } from "@vencord/discord-types";
 import { findByCodeLazy } from "@webpack";
 import { ChannelStore, Constants, Menu, MessageStore, React, RestAPI, showToast, Toasts } from "@webpack/common";
-import { Message } from "discord-types/general";
 
 import { replaceUrl } from "../embedReplace";
 
@@ -88,6 +88,12 @@ function isUrlInMessage(message: Message, url: string): boolean {
     const urls = message?.content?.match(/https?:\/\/[^\s]+/g) || [];
     for (const u of urls) {
         if (u === url || normaliseUrl(u) === url) {
+            return true;
+        }
+    }
+    for (const embed of message.embeds) {
+        // check if the embed content contains the url but not the embed.url property itself
+        if (embed.url !== url && (embed.rawDescription?.includes(url) || embed.fields.some((field: any) => field.value.includes(url)))) {
             return true;
         }
     }
