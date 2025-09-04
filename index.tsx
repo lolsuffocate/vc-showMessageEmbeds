@@ -6,26 +6,15 @@
 
 import { findGroupChildrenByChildId } from "@api/ContextMenu";
 import { updateMessage } from "@api/MessageUpdater";
-import { definePluginSettings } from "@api/Settings";
 import { ImageInvisible, ImageVisible } from "@components/Icons";
 import { Logger } from "@utils/Logger";
 import { parseUrl } from "@utils/misc";
-import definePlugin, { OptionType } from "@utils/types";
+import definePlugin from "@utils/types";
 import { Message } from "@vencord/discord-types";
 import { findByCodeLazy } from "@webpack";
 import { ChannelStore, Constants, Menu, MessageStore, React, RestAPI, showToast, Toasts } from "@webpack/common";
 
-import { replaceUrl } from "../embedReplace";
-
 const logger = new Logger("ShowMessageEmbeds");
-const settings = definePluginSettings({
-    doNotShowOnReplacedEmbeds: {
-        type: OptionType.BOOLEAN,
-        default: true,
-        description: "Don't show the 'Show Embed' button on replaced embeds when using the EmbedReplace plugin"
-    }
-});
-
 const addShowEmbedButton = (children, props) => {
     if (props.itemSrc || !props.itemHref || !props.message) return; // itemSrc means the right clicked item is an image/attachment
 
@@ -48,14 +37,6 @@ const addShowAttachmentEmbedButton = (children, props) => {
 
 const addButton = (children, message, url) => {
     url = normaliseUrl(url);
-
-    // if the user has an EmbedReplace rule that matches the result of replacing this url, don't show the button to show the original embed
-    if (settings.store.doNotShowOnReplacedEmbeds && Vencord.Plugins.isPluginEnabled("EmbedReplace")) {
-        const repUrl = normaliseUrl(replaceUrl(url));
-        if (repUrl !== url && isEmbedInMessage(message, repUrl)) { // if the replacement had an effect and the replaced url has an embed, don't show the button
-            return;
-        }
-    }
 
     if (!isEmbedInMessage(message, url)) {
         children.splice(0, 0,
@@ -211,8 +192,6 @@ export default definePlugin({
     name: "ShowMessageEmbeds",
     description: "Adds a context menu option to show embeds for links that don't have one",
     authors: [{ id: 772601756776923187n, name: "Suffocate" }],
-
-    settings,
 
     patches: [
         {
