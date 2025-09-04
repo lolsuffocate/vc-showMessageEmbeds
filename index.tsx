@@ -15,6 +15,7 @@ import { findByCodeLazy } from "@webpack";
 import { ChannelStore, Constants, Menu, MessageStore, React, RestAPI, showToast, Toasts } from "@webpack/common";
 
 const logger = new Logger("ShowMessageEmbeds");
+
 const addShowEmbedButton = (children, props) => {
     if (props.itemSrc || !props.itemHref || !props.message) return; // itemSrc means the right clicked item is an image/attachment
 
@@ -130,14 +131,14 @@ function normaliseUrl(url: string): string {
 
 const convertEmbed = findByCodeLazy(".uniqueId(\"embed_\")");
 
-function unfurlEmbed(url: string, message: Message) {
+async function unfurlEmbed(url: string, message: Message) {
     const channel = ChannelStore.getChannel(message.channel_id);
 
     if (!parseUrl(url)) {
         return;
     }
 
-    RestAPI.post({
+    const resp = await RestAPI.post({
         url: Constants.Endpoints.UNFURL_EMBED_URLS,
         body: {
             urls: [url]
@@ -145,38 +146,38 @@ function unfurlEmbed(url: string, message: Message) {
     }).catch(e => {
         showFailureToast("Failed to get embed");
         logger.error("Failed to get embed", e);
-    }).then(resp => {
-        if (!resp?.body || !resp?.body?.embeds || resp.body.embeds.length === 0) {
-            showFailureToast("No embeds found");
-            return;
-        }
-
-        const { embeds } = resp.body;
-        const convertedEmbeds: any = [];
-
-        for (const embed of embeds) {
-            try {
-                const convertedEmbed = convertEmbed(channel.id, message.id, embed);
-                if (!convertedEmbed) {
-                    showFailureToast("Failed to get embed");
-                    logger.error("embed object couldn't be converted", embed);
-                    continue;
-                }
-                convertedEmbeds.push(convertedEmbed);
-            } catch (e) {
-                showFailureToast("Failed to get embed");
-                logger.error("Failed to convert embed", e);
-            }
-        }
-
-        const newEmbeds = [...message.embeds, ...convertedEmbeds];
-
-        newEmbeds.sort((a: any, b: any) => {
-            return message.content.indexOf(a.url) - message.content.indexOf(b.url);
-        });
-
-        updateMessage(message.channel_id, message.id, { embeds: newEmbeds });
     });
+
+    if (!resp?.body?.embeds || resp.body.embeds.length === 0) {
+        showFailureToast("No embeds found");
+        return;
+    }
+
+    const { embeds } = resp.body;
+    const convertedEmbeds: any = [];
+
+    for (const embed of embeds) {
+        try {
+            const convertedEmbed = convertEmbed(channel.id, message.id, embed);
+            if (!convertedEmbed) {
+                showFailureToast("Failed to get embed");
+                logger.error("embed object couldn't be converted", embed);
+                continue;
+            }
+            convertedEmbeds.push(convertedEmbed);
+        } catch (e) {
+            showFailureToast("Failed to get embed");
+            logger.error("Failed to convert embed", e);
+        }
+    }
+
+    const newEmbeds = [...message.embeds, ...convertedEmbeds];
+
+    newEmbeds.sort((a: any, b: any) => {
+        return message.content.indexOf(a.url) - message.content.indexOf(b.url);
+    });
+
+    updateMessage(message.channel_id, message.id, { embeds: newEmbeds });
 }
 
 function removeEmbed(url: string, message: Message) {
